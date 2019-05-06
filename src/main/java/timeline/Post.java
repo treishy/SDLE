@@ -1,5 +1,9 @@
 package timeline;
 
+import security.PostSignature;
+
+import java.security.PrivateKey;
+import java.security.PublicKey;
 import java.util.Date;
 
 public class Post {
@@ -67,4 +71,25 @@ public class Post {
         this.utilizador = utilizador;
     }
 
+    public byte[] computeHash () {
+        return String.format( "%s-%d-%s-%s", this.id, this.data.getTime(), this.getUtilizador(), this.getMensagem() ).getBytes();
+    }
+
+    public String computeSignature ( PrivateKey privateKey ) throws Exception {
+        byte[] hash = this.computeHash();
+
+        return new String( new PostSignature().sign( hash, privateKey ) );
+    }
+
+    public boolean verify ( PublicKey publicKey ) throws Exception {
+        return new PostSignature().verify( this.computeHash(), this.assinatura.getBytes(), publicKey );
+    }
+
+    public static Post createSigned ( int id, String message, String user, PrivateKey privateKey ) throws Exception {
+        Post post = new Post( id, message, null, user );
+
+        post.setAssinatura( post.computeSignature( privateKey ) );
+
+        return post;
+    }
 }

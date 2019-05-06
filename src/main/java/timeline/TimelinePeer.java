@@ -1,6 +1,5 @@
 package timeline;
 
-import net.tomp2p.dht.FutureGet;
 import net.tomp2p.dht.PeerBuilderDHT;
 import net.tomp2p.dht.PeerDHT;
 import net.tomp2p.dht.StorageMemory;
@@ -11,6 +10,12 @@ import net.tomp2p.peers.Number640;
 
 import java.io.IOException;
 import java.net.*;
+import java.rmi.Remote;
+import java.rmi.RemoteException;
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
+import java.rmi.server.UnicastRemoteObject;
+import java.security.PrivateKey;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -25,7 +30,7 @@ public class TimelinePeer {
         }
     }
 
-    protected static int PORT = 4050;
+    protected int port = 4050;
 
     protected String username;
 
@@ -35,7 +40,66 @@ public class TimelinePeer {
 
     protected PeerDHT peerDHT;
 
-    protected List<String> subscriptions = new ArrayList<>();
+    protected List<User> subscriptions = new ArrayList<>();
+
+    protected List<Post> posts = new ArrayList<>();
+
+    protected TimelineServer server;
+
+    protected DBUtils db;
+
+    protected PeerKeys keys = new PeerKeys();
+
+    protected int id = 0;
+
+    public TimelinePeer ( String username ) {
+        this.username = username;
+    }
+
+    public void startServer () {
+        try {
+            this.server = new TimelineServer( this );
+            TimelineServerInterface stub = ( TimelineServerInterface ) UnicastRemoteObject.exportObject( server, 0 );
+
+            // Bind the remote object's stub in the registry
+            Registry registry = LocateRegistry.getRegistry(this.port + 1);
+            registry.bind( "TimelineServerInterface", stub );
+
+            System.err.println( "Server ready" );
+        } catch ( Exception e ) {
+            System.err.println( "Server exception: " + e.toString() );
+            e.printStackTrace();
+        }
+    }
+
+    public TimelineServerInterface createClient ( InetSocketAddress host ) {
+        try {
+            Registry registry = LocateRegistry.getRegistry( host.getHostString(), host.getPort() + 1 );
+
+            TimelineServerInterface stub = ( TimelineServerInterface ) registry.lookup( "TimelineServerInterface" );
+
+            return stub;
+        } catch ( Exception e ) {
+            e.printStackTrace();
+
+            return null;
+        }
+    }
+
+    /**
+     * Called before `start`, loads data from the database into the class (such as this user's own posts)
+     */
+    public void load () throws Exception {
+        this.keys.init();
+
+        this.db = new DBUtils();
+
+        this.posts = this.db.findPosts( this.username );
+
+        this.id = this.posts.stream().mapToInt( Post::getId ).max().orElse( -1 ) + 1;
+
+        // TODO Load subscriptions
+    }
 
     /**
      * Connects to a known peer, member of the DHT, and integrates itself into the cluster
@@ -43,19 +107,21 @@ public class TimelinePeer {
      * @param knownPeer
      * @throws Exception
      */
-    public void start ( InetSocketAddress knownPeer ) throws Exception {
+    public void start ( int port, InetSocketAddress knownPeer ) throws Exception {
+        this.port = port;
+
         this.address = getSelfAddress();
 
         if ( this.address == null ) {
             throw new Exception( "Cannot determine own address." );
         }
 
-        System.out.println( this.address.toString() );
+        InetSocketAddress portAddress = InetSocketAddress.createUnresolved( this.address.toString(), port );
 
-        Number160 key = Number160.createHash( this.address.toString() );
+        Number160 key = Number160.createHash( portAddress.toString() );
 
         this.peer = new PeerBuilder( key )
-                .ports( PORT )
+                .ports( port )
                 .start();
 
         // Inicia a DHT
@@ -64,7 +130,7 @@ public class TimelinePeer {
         // O segundo a iniciar liga-se ao IP do primeiro através do método bootstrap
         if ( knownPeer != null ) {
             this.peer.bootstrap()
-                    .inetAddress( knownPeer.getAddress() )
+                    .inetAddress( InetAddress.getByName( knownPeer.getHostName() ) )
                     .ports( knownPeer.getPort() )
                     .start();
 
@@ -72,14 +138,50 @@ public class TimelinePeer {
             // Não sei se há maneira melhor de fazer isto sem ser esperar n segundos
             Thread.sleep( 4000 );
         }
+
+        // TODO Self publish and publish all already existing subscriptions
+        this.publishOwnership( this.username );
     }
 
     public void stop () {
         Number160 self = Number160.createHash( this.address.toString() );
 
-        for ( String subscription : this.subscriptions ) {
+        for ( User user : this.subscriptions ) {
             // TODO We can fork and join this futures, running them all at the same time
-            this.peerDHT.remove( Number160.createHash( subscription ) ).contentKey( self ).start().awaitUninterruptibly();
+            this.peerDHT.remove( Number160.createHash( user.getUsername() ) ).contentKey( self ).start().awaitUninterruptibly();
+        }
+
+        this.peerDHT.shutdown().awaitUninterruptibly();
+
+        this.peer.shutdown().awaitUninterruptibly();
+
+        this.db.mongoClient.close();
+    }
+
+    public void publish ( String message ) throws Exception {
+        int id = this.id++;
+
+        Post post = Post.createSigned( id, message, this.username, this.keys.privateKey.get() );
+
+        if ( this.db.insertPost( post ) ) {
+            this.posts.add( post );
+        } else {
+            throw new Exception( "Could not store the post in the database." );
+        }
+    }
+
+    public List<Post> fetch ( String username, InetSocketAddress address ) {
+        TimelineServerInterface first = this.createClient( address );
+
+        try {
+            List<Post> posts = first.getPosts( username, null );
+
+            // TODO Validate posts and exclude posts that do not match the signature
+            // TODO Store validated posts in the database
+
+            return posts;
+        } catch ( RemoteException e ) {
+            return new ArrayList<>();
         }
     }
 
@@ -90,22 +192,51 @@ public class TimelinePeer {
      *
      * @param username
      */
-    public void fetch ( String username ) {
-        List<InetAddress> addresses = this.peerDHT.get( Number160.createHash( username ) ).keys()
+    public List<Post> fetch ( String username ) {
+        Collection<String> keys = EasyDHT.list( peerDHT, username );
+
+        List<InetSocketAddress> addresses = keys
                 .stream()
                 .map( hash -> {
                     try {
-                        return InetAddress.getByName( hash.toString() );
-                    }catch ( Exception ex ) {
+                        String[] parts = hash.split( ":" );
+
+                        System.out.printf( "FOUND %s, %s\n", hash, username );
+
+                        return InetSocketAddress.createUnresolved( parts[ 0 ], Integer.parseInt( parts[ 1 ] ) );
+                    } catch ( Exception ex ) {
                         return null;
                     }
                 } )
                 .filter( Objects::nonNull )
                 .collect( Collectors.toList() );
 
-        System.out.println( addresses );
-
         // TODO Sample a few of the returned addresses, and ask each one for the user's contents
+        if ( addresses.size() > 0 ) {
+            return fetch( username, addresses.get( 0 ) );
+        }
+
+        return new ArrayList<>();
+    }
+
+    public List<Post> find ( String username ) {
+        if ( this.username.equals( username ) ) {
+            return this.posts;
+        } else if ( this.subscriptions.stream().anyMatch( user -> user.getUsername().equals( username ) ) ) {
+            return this.db.findPosts( username );
+        } else {
+            return this.fetch( username );
+        }
+    }
+
+    protected void publishOwnership ( String user ) throws IOException {
+//        Number160 self = Number160.createHash( this.address.toString() );
+
+        EasyDHT.add( peerDHT, user, this.address.getHostAddress() + ":" + this.port );
+    }
+
+    protected void unpublishOwnership ( String user ) throws IOException {
+        EasyDHT.remove( peerDHT, user, this.address.getHostAddress() + ":" + this.port );
     }
 
     /**
@@ -113,14 +244,11 @@ public class TimelinePeer {
      *
      * @param user
      */
-    public void subscribeTo ( String user ) {
-        Number160 self = Number160.createHash( this.address.toString() );
+    public void subscribeTo ( User user ) throws IOException {
+        this.publishOwnership( user.getUsername() );
 
-        try {
-            this.peerDHT.put( Number160.createHash( user ) ).keyObject( self, this.username ).start().awaitUninterruptibly();
-        } catch ( IOException e ) {
-            e.printStackTrace();
-        }
+        // TODO Save subscription to database
+        // TODO Fetch user posts and store them
 
         this.subscriptions.add( user );
     }
@@ -128,13 +256,39 @@ public class TimelinePeer {
     /**
      * Removes a subscription, and removes itself from the DHT node for that user
      *
-     * @param subscription
+     * @param user
      */
-    public void unsubscribeTo ( String subscription ) {
-        Number160 self = Number160.createHash( this.address.toString() );
+    public void unsubscribeTo ( User user ) throws IOException {
+        this.unpublishOwnership( user.getUsername() );
 
-        this.peerDHT.remove( Number160.createHash( subscription ) ).contentKey( self ).start().awaitUninterruptibly();
+        this.subscriptions.remove( user );
 
-        this.subscriptions.remove( subscription );
+        // TODO Remove subscription to database
+        // TODO Remove user posts from the database
+    }
+}
+
+interface TimelineServerInterface extends Remote {
+    List<Post> getPosts ( String user, Date time ) throws RemoteException;
+}
+
+class TimelineServer implements TimelineServerInterface {
+    protected TimelinePeer peer;
+
+    public TimelineServer ( TimelinePeer peer ) {
+        this.peer = peer;
+    }
+
+    public List<Post> getPosts ( String user, Date time ) {
+        if ( this.peer.username.equals( user ) ) {
+            return peer.posts
+                    .stream()
+                    .filter( post -> time == null || post.getData().after( time ) )
+                    .collect( Collectors.toList() );
+        } else {
+            // When the requested username is now our own
+            // Lookup in the Mongo database for posts from this user
+            return new ArrayList<>();
+        }
     }
 }

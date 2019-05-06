@@ -1,82 +1,86 @@
 package timeline;
 
-//import de.cgrotz.kademlia.Kademlia;
-//import de.cgrotz.kademlia.config.UdpListener;
-//import de.cgrotz.kademlia.node.Node;
-//import de.cgrotz.kademlia.node.Key;
-//import de.cgrotz.kademlia.storage.InMemoryStorage;
-import net.tomp2p.dht.*;
-import net.tomp2p.futures.BaseFuture;
-import net.tomp2p.futures.FutureBootstrap;
-import net.tomp2p.p2p.PeerBuilder;
-import net.tomp2p.peers.Number160;
-import net.tomp2p.p2p.Peer;
-import net.tomp2p.peers.PeerAddress;
-import net.tomp2p.storage.Data;
-
-import java.io.IOException;
 import java.net.InetAddress;
-
+import java.net.InetSocketAddress;
+import java.util.Collections;
+import java.util.List;
+import java.util.Scanner;
+import java.util.stream.Collectors;
 
 public class Application {
-    public static void main (String[] args) throws IOException, InterruptedException, ClassNotFoundException {
-        System.out.println( "udp://127.0.0.1:" + args[ 1 ] );
+    public static String login () {
+        Scanner scanner = new Scanner( System.in );
 
-        // Inicia-se o peer local (a classe Peer é do TomP2P, tem o mesmo nome da nossa, depois se calhar
-        // convém renomear a nossa xD)
-        Peer peerRaw = new PeerBuilder( new Number160( Integer.parseInt( args[ 0 ] ) ) )
-                .ports( Integer.parseInt( args[ 1 ] ) )
-                .start();
+        System.out.println( "Username: " );
 
-        // Inicia a DHT
-        PeerDHT peer = new PeerBuilderDHT( peerRaw ).storage( new StorageMemory() ).start();
+        return scanner.nextLine().trim();
+    }
 
-        // O segundo a iniciar liga-se ao IP do primeiro através do método bootstrap
-        if ( args.length > 2 ) {
-            peerRaw.bootstrap()
-                    .inetAddress( InetAddress.getByName( "127.0.0.1" ) )
-                    .ports( Integer.parseInt( args[ 2 ] ) )
-                    .start();
+    // ARGS:
+    // 1234
+    // 2345 127.0.0.1 1234
+    public static void commands ( TimelinePeer peer ) {
+        String command = null;
 
-            // Espera-se um bocado para ele se conectar aos outros Peers e obter as informações.
-            // Não sei se há maneira melhor de fazer isto sem ser esperar n segundos
-            Thread.sleep( 4000 );
+        Scanner scanner = new Scanner( System.in );
 
-            FutureGet fg = peer.get(Number160.createHash("key")).start();
+        do {
+            System.out.print( "> " );
+            command = scanner.nextLine().trim();
 
-            System.out.println( "Got " + new String( (byte[])fg.await().data().object() ) );
-        } else {
-            peer.put( Number160.createHash("key") ).object( "Ola".getBytes() ).start();
+            try {
+                if ( command.startsWith( "post " ) ) {
+                    peer.publish( command.substring( "post ".length() ) );
+                } else if ( command.startsWith( "find " ) ) {
+                    String username = command.split( " " )[ 1 ];
+
+                    int count = Integer.parseInt( command.split( " " )[ 2 ] );
+
+                    List<Post> posts = peer.find( username );
+
+                    Collections.reverse( posts );
+
+                    posts = posts.stream().limit( count ).collect( Collectors.toList() );
+
+                    for ( Post post : posts ) {
+                        System.out.printf( "%d %s: %s - %s\n", post.getId(), post.getData().toString(), post.getMensagem(), post.getUtilizador() );
+                    }
+                } else if ( command.equals( "help" ) ) {
+                    System.out.println( "Available commands:" );
+                    System.out.println( " - post <message>: Posts a message under the current user" );
+                    System.out.println( " - find <username> <n>: Shows \"n\" newest messages from \"username\"" );
+                    System.out.println( " - help: Display this help message" );
+                    System.out.println( " - quit: Gracefully closes the application" );
+                } else if ( command.equals( "quit" ) ) {
+                    System.out.println( "Exiting..." );
+                } else {
+                    System.out.println( "Unknown command. Try again." );
+                }
+            } catch ( Exception ex ) {
+                ex.printStackTrace();
+            }
+        } while ( !command.equals( "quit" ) );
+    }
+
+    public static void main ( String[] args ) {
+        String username = Application.login();
+
+        TimelinePeer peer = new TimelinePeer( username );
+
+        try {
+            peer.load();
+
+            InetSocketAddress address = args.length >= 3
+                    ? InetSocketAddress.createUnresolved( args[ 1 ], Integer.parseInt( args[ 2 ] ) )
+                    : null;
+
+            peer.start( Integer.parseInt( args[ 0 ] ), address );
+
+            Application.commands( peer );
+
+            peer.stop();
+        } catch ( Exception e ) {
+            e.printStackTrace();
         }
-
-
-        //store object
-//        FutureDHT<BaseFuture> fp = peer.put(Number160.createHash("key")).setObject("hello world").build();
-//
-//        fp.awaitUninterruptibly();
-//
-//        //get object
-//        FutureDHT fg = peer.get(Number160.createHash("key")).build();
-//
-//        //or block
-//        fg.awaitUninterruptibly();
-
-        //send direct messages to a particular peer
-        // peer.sendDirect().setPeerAddress(peer1).setObject(“test”).build();
-        // Kademlia kad = new Kademlia( new Key( Integer.parseInt( args[ 0 ] ) ), "udp://127.0.0.1:" + args[ 1 ], new InMemoryStorage() );
-
-        // if ( args.length > 2 ) {
-        //     Node node = Node.builder().advertisedListener(
-        //         new UdpListener( "udp://127.0.0.1:" + args[ 2 ] )
-        //     ).build();
-
-        //     kad.bootstrap( node );
-
-        //     System.out.println( kad.get( Key.build( "12" ) ) );
-        // } else {
-        //     kad.put( Key.build( "12" ), "Hello World" );
-        //     kad.put( Key.build( "23" ), "Hello World 2" );
-        //     // System.out.println( kad.get( new Key( 5 ) ) );
-        // }
     }
 }

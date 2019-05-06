@@ -1,5 +1,6 @@
 package timeline;
 
+import com.mongodb.Block;
 import com.mongodb.DB;
 import com.mongodb.MongoClient;
 import com.mongodb.client.MongoCollection;
@@ -7,7 +8,10 @@ import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.result.DeleteResult;
 import org.bson.Document;
 
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
+import java.util.function.Consumer;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
@@ -67,6 +71,23 @@ public class DBUtils {
         collectionUsers.deleteOne(eq("utilizador", username));
     }
 
+    public List<Post> findPosts ( String username ) {
+        List<Post> list = new ArrayList<>();
+
+        collectionPosts.find( eq( "utilizador", username ) ).forEach( ( Consumer<? super Document> ) doc -> {
+            int id = doc.getInteger( "id" );
+            Date date = doc.getDate( "data" );
+            String message = doc.getString( "mensagem" );
+            String signature = doc.getString( "assinatura" );
+
+            Post post = new Post( id, date, message, signature, username );
+
+            list.add( post );
+        } );
+
+        return list;
+    }
+
     public static void main(String[] args) {
         DBUtils db = new DBUtils();
         boolean result = false;
@@ -75,6 +96,4 @@ public class DBUtils {
         result = db.insertPost(new Post(2, new Date(), "melane", "assinatura",user.getUsername()));
         System.out.println("Insert de User: "+ result);
     }
-
-
 }
