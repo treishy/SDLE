@@ -19,7 +19,7 @@ import java.security.PrivateKey;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class TimelinePeer {
+public class TimelinePeer  {
     protected static InetAddress getSelfAddress () {
         try ( final DatagramSocket socket = new DatagramSocket() ) {
             socket.connect( InetAddress.getByName( "8.8.8.8" ), 10002 );
@@ -272,10 +272,11 @@ interface TimelineServerInterface extends Remote {
     List<Post> getPosts ( String user, Date time ) throws RemoteException;
 }
 
-class TimelineServer implements TimelineServerInterface {
+class TimelineServer extends UnicastRemoteObject implements TimelineServerInterface {
     protected TimelinePeer peer;
 
-    public TimelineServer ( TimelinePeer peer ) {
+    public TimelineServer ( TimelinePeer peer ) throws RemoteException {
+        super();
         this.peer = peer;
     }
 

@@ -2,11 +2,12 @@ package timeline;
 
 import security.PostSignature;
 
+import java.io.Serializable;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.util.Date;
 
-public class Post {
+public class Post implements Serializable {
     private int id;
     private Date data;
     private String mensagem;
