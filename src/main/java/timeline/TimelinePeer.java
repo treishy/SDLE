@@ -58,11 +58,11 @@ public class TimelinePeer  {
 
     public void startServer () {
         try {
-            this.server = new TimelineServer( this );
+            this.server = new TimelineServer( this);
             TimelineServerInterface stub = ( TimelineServerInterface ) UnicastRemoteObject.exportObject( server, 0 );
 
             // Bind the remote object's stub in the registry
-            Registry registry = LocateRegistry.getRegistry(this.port + 1);
+            Registry registry = LocateRegistry.createRegistry(this.port + 1);
             registry.bind( "TimelineServerInterface", stub );
 
             System.err.println( "Server ready" );
@@ -74,7 +74,7 @@ public class TimelinePeer  {
 
     public TimelineServerInterface createClient ( InetSocketAddress host ) {
         try {
-            Registry registry = LocateRegistry.getRegistry( host.getHostString(), host.getPort() + 1 );
+            Registry registry = LocateRegistry.getRegistry( host.getHostString());
 
             TimelineServerInterface stub = ( TimelineServerInterface ) registry.lookup( "TimelineServerInterface" );
 
@@ -89,6 +89,7 @@ public class TimelinePeer  {
     /**
      * Called before `start`, loads data from the database into the class (such as this user's own posts)
      */
+
     public void load () throws Exception {
         this.keys.init();
 
@@ -139,6 +140,8 @@ public class TimelinePeer  {
             Thread.sleep( 4000 );
         }
 
+        this.startServer();
+
         // TODO Self publish and publish all already existing subscriptions
         this.publishOwnership( this.username );
     }
@@ -172,7 +175,6 @@ public class TimelinePeer  {
 
     public List<Post> fetch ( String username, InetSocketAddress address ) {
         TimelineServerInterface first = this.createClient( address );
-
         try {
             List<Post> posts = first.getPosts( username, null );
 
@@ -194,6 +196,7 @@ public class TimelinePeer  {
      */
     public List<Post> fetch ( String username ) {
         Collection<String> keys = EasyDHT.list( peerDHT, username );
+        System.out.println(keys);
 
         List<InetSocketAddress> addresses = keys
                 .stream()
@@ -272,11 +275,10 @@ interface TimelineServerInterface extends Remote {
     List<Post> getPosts ( String user, Date time ) throws RemoteException;
 }
 
-class TimelineServer extends UnicastRemoteObject implements TimelineServerInterface {
+class TimelineServer implements TimelineServerInterface {
     protected TimelinePeer peer;
 
     public TimelineServer ( TimelinePeer peer ) throws RemoteException {
-        super();
         this.peer = peer;
     }
 

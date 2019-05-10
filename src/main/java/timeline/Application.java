@@ -75,7 +75,7 @@ public class Application {
                     : null;
 
             peer.start( Integer.parseInt( args[ 0 ] ), address );
-
+            //peer.startServer();
             Application.commands( peer );
 
             peer.stop();
