@@ -7,21 +7,15 @@ import net.tomp2p.futures.FutureDirect;
 import net.tomp2p.p2p.Peer;
 import net.tomp2p.p2p.PeerBuilder;
 import net.tomp2p.peers.Number160;
-import net.tomp2p.peers.Number640;
 import net.tomp2p.peers.PeerAddress;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.net.*;
-import java.rmi.Remote;
-import java.rmi.RemoteException;
-import java.rmi.registry.LocateRegistry;
-import java.rmi.registry.Registry;
-import java.rmi.server.UnicastRemoteObject;
-import java.security.PrivateKey;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class TimelinePeer  {
+public class TimelinePeer {
     protected static InetAddress getSelfAddress () {
         try ( final DatagramSocket socket = new DatagramSocket() ) {
             socket.connect( InetAddress.getByName( "8.8.8.8" ), 10002 );
@@ -59,40 +53,11 @@ public class TimelinePeer  {
     }
 
     public void startServer () {
-        try {
-            this.peer.objectDataReply( ( PeerAddress sender, Object request) -> {
-                System.out.println( (String)request );
-                return "Response";
-            } );
-
-            this.server = new TimelineServer( this);
-            TimelineServerInterface stub = ( TimelineServerInterface ) UnicastRemoteObject.exportObject( server, 0 );
-
-            // Bind the remote object's stub in the registry
-            System.out.println( "Creating registry " + ( port + 1 ) );
-            Registry registry = LocateRegistry.createRegistry(this.port + 1);
-            registry.bind( "TimelineServerInterface", stub );
-
-            System.err.println( "Server ready" );
-        } catch ( Exception e ) {
-            System.err.println( "Server exception: " + e.toString() );
-            e.printStackTrace();
-        }
+        this.server = new TimelineServer( this );
     }
 
-    public TimelineServerInterface createClient ( InetSocketAddress host ) {
-        try {
-            System.out.println( "LocateRegistry " + ( host.getPort() + 1 ) );
-            Registry registry = LocateRegistry.getRegistry( host.getHostString(), host.getPort() + 1 );
-            System.out.println( "Lookup" );
-            TimelineServerInterface stub = ( TimelineServerInterface ) registry.lookup( "TimelineServerInterface" );
-            System.out.println( "Return" );
-            return stub;
-        } catch ( Exception e ) {
-            e.printStackTrace();
-
-            return null;
-        }
+    public TimelineClient createClient ( InetSocketAddress host ) {
+        return new TimelineClient( peer, host );
     }
 
     /**
@@ -126,12 +91,9 @@ public class TimelinePeer  {
             throw new Exception( "Cannot determine own address." );
         }
 
-        InetSocketAddress portAddress = InetSocketAddress.createUnresolved( this.address.toString(), port );
+        InetSocketAddress portAddress = InetSocketAddress.createUnresolved( this.address.getHostAddress(), port );
 
-        Number160 key = Number160.createHash( portAddress.toString() );
-
-        System.out.println( portAddress.toString() );
-        System.out.println( key );
+        Number160 key = Number160.createHash( portAddress.getHostString() + ":" + portAddress.getPort() );
 
         this.peer = new PeerBuilder( key )
                 .ports( port )
@@ -159,7 +121,7 @@ public class TimelinePeer  {
     }
 
     public void stop () {
-        Number160 self = Number160.createHash( this.address.toString() );
+        Number160 self = this.peer.peerID();
 
         for ( User user : this.subscriptions ) {
             // TODO We can fork and join this futures, running them all at the same time
@@ -186,40 +148,14 @@ public class TimelinePeer  {
     }
 
     public List<Post> fetch ( String username, InetSocketAddress address ) {
-        Number160 key = Number160.createHash( "/" + address.getHostString() + ":1234" );
-
-        try {
-            System.out.println( "/" + address.getHostString() + ":1234" );
-            System.out.println( key );
-            FutureDirect fd = peer.sendDirect( new PeerAddress( key, address.getHostString(), address.getPort(), address.getPort() ) ).object( "Request" ).start();
-
-            fd.awaitUninterruptibly();
-
-            if ( fd.isSuccess() ) {
-                System.out.println( (String)fd.object() );
-            } else {
-                System.err.println( fd.failedReason() );
-            }
-        } catch ( ClassNotFoundException | IOException e ) {
-            e.printStackTrace();
-        }
-
         TimelineServerInterface first = this.createClient( address );
-        try {
-            System.out.println( first );
-            System.out.println( username );
-            System.out.println( address );
-            List<Post> posts = first.getPosts( username, null );
 
-            System.out.println( "returned" );
-            System.out.println( posts );
-            // TODO Validate posts and exclude posts that do not match the signature
-            // TODO Store validated posts in the database
+        List<Post> posts = first.getPosts( username, null );
 
-            return posts;
-        } catch ( RemoteException e ) {
-            return new ArrayList<>();
-        }
+        // TODO Validate posts and exclude posts that do not match the signature
+        // TODO Store validated posts in the database
+
+        return posts;
     }
 
     /**
@@ -231,7 +167,7 @@ public class TimelinePeer  {
      */
     public List<Post> fetch ( String username ) {
         Collection<String> keys = EasyDHT.list( peerDHT, username );
-        System.out.println(keys);
+        System.out.println( keys );
 
         List<InetSocketAddress> addresses = keys
                 .stream()
@@ -306,19 +242,95 @@ public class TimelinePeer  {
     }
 }
 
-interface TimelineServerInterface extends Remote {
-    List<Post> getPosts ( String user, Date time ) throws RemoteException;
+interface TimelineServerInterface {
+    List<Post> getPosts ( String user, Date time );
+}
+
+class TimelineRequestMessage implements Serializable {
+    public enum Type {GetPosts, GetPublicKey}
+
+    public Type type;
+
+    // GetPosts
+    public String user;
+    public Date time;
+
+    // GetPublicKey
+}
+
+class TimelineResponseMessage implements Serializable {
+    // GetPosts
+    public List<Post> posts;
+
+    // GetPublicKey
+}
+
+class TimelineClient implements TimelineServerInterface {
+    private Peer peer;
+    private InetSocketAddress address;
+
+    public TimelineClient ( Peer peer, InetSocketAddress address ) {
+        this.peer = peer;
+        this.address = address;
+    }
+
+    private TimelineResponseMessage call ( TimelineRequestMessage request ) {
+        Number160 key = Number160.createHash( address.getHostString() + ":" + address.getPort() );
+
+        try {
+            FutureDirect fd = peer.sendDirect( new PeerAddress( key, address.getHostString(), address.getPort(), address.getPort() ) ).object( request ).start();
+
+            fd.awaitUninterruptibly();
+
+            if ( fd.isSuccess() ) {
+                return ( TimelineResponseMessage ) fd.object();
+            } else {
+                System.err.println( fd.failedReason() );
+                return null;
+            }
+        } catch ( ClassNotFoundException | IOException e ) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    public List<Post> getPosts ( String user, Date time ) {
+        TimelineRequestMessage request = new TimelineRequestMessage();
+
+        request.type = TimelineRequestMessage.Type.GetPosts;
+        request.user = user;
+        request.time = time;
+
+        TimelineResponseMessage response = this.call( request );
+
+        if ( response == null ) {
+            return new ArrayList<>();
+        }
+
+        return response.posts;
+    }
 }
 
 class TimelineServer implements TimelineServerInterface {
     protected TimelinePeer peer;
 
-    public TimelineServer ( TimelinePeer peer ) throws RemoteException {
+    public TimelineServer ( TimelinePeer peer ) {
         this.peer = peer;
+
+        this.peer.peer.objectDataReply( ( PeerAddress sender, Object rawRequest ) -> {
+            TimelineRequestMessage request = ( TimelineRequestMessage ) rawRequest;
+
+            TimelineResponseMessage response = new TimelineResponseMessage();
+
+            if ( request.type == TimelineRequestMessage.Type.GetPosts ) {
+                response.posts = this.getPosts( request.user, request.time );
+            }
+
+            return response;
+        } );
     }
 
     public List<Post> getPosts ( String user, Date time ) {
-        System.out.printf( "%s %s\n", user, time.toString() );
         if ( this.peer.username.equals( user ) ) {
             return peer.posts
                     .stream()
