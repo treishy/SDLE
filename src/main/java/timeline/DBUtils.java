@@ -15,6 +15,7 @@ import java.util.function.Consumer;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Filters.lt;
 
 public class DBUtils {
     MongoClient mongoClient;
@@ -22,29 +23,39 @@ public class DBUtils {
     MongoCollection<Document> collectionUsers;
     MongoCollection<Document> collectionPosts;
     //possivelmente dht
-    public DBUtils() {
+    public DBUtils(String username) {
+        String postsCollection = String.format("Posts_%s", username);
+        String peersCollection = String.format("Peers_%s",username);
         try {
             this.mongoClient = new MongoClient("localhost", 27017);
             this.db = mongoClient.getDatabase("P2P");
-            if (db.getCollection("Posts") == null)
-                db.createCollection("Posts");
-            if (db.getCollection("Peers") == null)
-                db.createCollection("Peers");
-            this.collectionUsers = db.getCollection("Peers");
-            this.collectionPosts = db.getCollection("Posts");
+            if (db.getCollection(postsCollection) == null)
+                db.createCollection(postsCollection);
+            if (db.getCollection(peersCollection) == null)
+                db.createCollection(peersCollection);
+            this.collectionUsers = db.getCollection(peersCollection);
+            this.collectionPosts = db.getCollection(postsCollection);
+            cleanOldPosts();
         }
         catch (Exception e){
             e.printStackTrace();
         }
+
     }
 
+    public void cleanOldPosts(){
+        Date now = new Date();
+        long weekago = now.getTime() - 604800000;
+        DeleteResult result = collectionPosts.deleteMany(lt("getTime", weekago));
+    }
     public boolean insertPost(Post post){
         boolean result = false;
         Document doc = new Document("id", post.getId())
                 .append("mensagem", post.getMensagem())
                 .append("utilizador", post.getUtilizador())
                 .append("assinatura", post.getAssinatura())
-                .append("data", post.getData());
+                .append("data", post.getData())
+                .append("getTime", post.getData().getTime());
         collectionPosts.insertOne(doc);
         if (collectionPosts.find(and(eq("id",post.getId()), eq("utilizador", post.getUtilizador()))).first()!= null)
             result = true;
@@ -89,10 +100,10 @@ public class DBUtils {
     }
 
     public static void main(String[] args) {
-        DBUtils db = new DBUtils();
+        DBUtils db = new DBUtils("teste");
         boolean result = false;
         User user = new User("joaquim", "melone");
-        //result = db.insertSubscription(new User("treishy", "melone"));
+        db.insertSubscription(new User("treishy", "melone"));
         result = db.insertPost(new Post(2, new Date(), "melane", "assinatura",user.getUsername()));
         System.out.println("Insert de User: "+ result);
     }

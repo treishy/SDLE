@@ -67,7 +67,7 @@ public class TimelinePeer {
     public void load () throws Exception {
         this.keys.init();
 
-        this.db = new DBUtils();
+        this.db = new DBUtils(this.username);
 
         this.posts = this.db.findPosts( this.username );
 
