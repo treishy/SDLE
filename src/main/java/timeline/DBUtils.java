@@ -82,6 +82,22 @@ public class DBUtils {
         collectionUsers.deleteOne(eq("utilizador", username));
     }
 
+    public List<User> findSubscriptions () {
+        List<User> list = new ArrayList<>();
+
+        collectionUsers.find().forEach( ( Consumer<? super Document> ) doc -> {
+            String username = doc.getString( "username" );
+            String password = doc.getString( "mensagem" );
+            int activity = doc.getInteger( "atividade" );
+
+            User user = new User( username, password, activity );
+
+            list.add( user );
+        } );
+
+        return list;
+    }
+
     public List<Post> findPosts ( String username ) {
         List<Post> list = new ArrayList<>();
 

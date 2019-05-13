@@ -1,6 +1,15 @@
 package timeline;
 
-public class User {
+import security.KeyFingerprinter;
+
+import java.io.Serializable;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.PublicKey;
+import java.security.spec.InvalidKeySpecException;
+import java.util.Objects;
+
+public class User implements Serializable {
     private String username;
     private String publicKey;
     private int activity;
@@ -39,5 +48,19 @@ public class User {
 
     public void setActivity(int activity) {
         this.activity = activity;
+    }
+
+    public PublicKey getPublicKey ( String algorithm ) {
+        try {
+            return PeerKeys.PersistentKey.<PublicKey>fromString( algorithm, PeerKeys.KeyType.Public, this.getPassword() ).get();
+        } catch ( InvalidKeySpecException | NoSuchAlgorithmException e ) {
+            e.printStackTrace();
+
+            return null;
+        }
+    }
+
+    public String getPublicKeyFingerprint ( String algorithm ) {
+        return KeyFingerprinter.md5Fingerprint( this.getPublicKey( algorithm ) );
     }
 }

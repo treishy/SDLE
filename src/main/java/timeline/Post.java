@@ -5,6 +5,7 @@ import security.PostSignature;
 import java.io.Serializable;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.util.Base64;
 import java.util.Date;
 
 public class Post implements Serializable {
@@ -79,11 +80,15 @@ public class Post implements Serializable {
     public String computeSignature ( PrivateKey privateKey ) throws Exception {
         byte[] hash = this.computeHash();
 
-        return new String( new PostSignature().sign( hash, privateKey ) );
+        Base64.Encoder encoder = Base64.getEncoder();
+
+        return new String( encoder.encode( new PostSignature().sign( hash, privateKey ) ) );
     }
 
     public boolean verify ( PublicKey publicKey ) throws Exception {
-        return new PostSignature().verify( this.computeHash(), this.assinatura.getBytes(), publicKey );
+        Base64.Decoder decoder = Base64.getDecoder();
+
+        return new PostSignature().verify( this.computeHash(), decoder.decode( this.assinatura ), publicKey );
     }
 
     public static Post createSigned ( int id, String message, String user, PrivateKey privateKey ) throws Exception {

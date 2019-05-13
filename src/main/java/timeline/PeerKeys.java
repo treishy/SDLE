@@ -21,6 +21,19 @@ public class PeerKeys {
     }
 
     public static class PersistentKey<K extends Key> {
+        public static <K extends Key> PersistentKey<K> fromString ( String algorithm, KeyType type, String string ) throws InvalidKeySpecException, NoSuchAlgorithmException {
+            return fromBytes( algorithm, type, string.getBytes() );
+        }
+
+        public static <K extends Key> PersistentKey<K> fromBytes ( String algorithm, KeyType type, byte[] bytes ) throws InvalidKeySpecException, NoSuchAlgorithmException {
+            PersistentKey<K> key = new PersistentKey<>( algorithm, type, null );
+
+            key.read( bytes );
+
+            return key;
+        }
+
+
         protected String getHeader () {
             return String.format( "-----BEGIN %s %s KEY-----\n", this.algorithm, this.type == KeyType.Private ? "PRIVATE" : "PUBLIC" );
         }
@@ -59,13 +72,14 @@ public class PeerKeys {
             return new File( this.file ).exists();
         }
 
-        // https://www.novixys.com/blog/how-to-generate-rsa-keys-java/
+        public void read ( String string ) throws InvalidKeySpecException, NoSuchAlgorithmException {
+            this.read( string.getBytes() );
+        }
+
         @SuppressWarnings( "unchecked" )
-        public void load () throws NoSuchAlgorithmException, InvalidKeySpecException, IOException {
+        public void read ( byte[] bytes ) throws NoSuchAlgorithmException, InvalidKeySpecException {
             int headerLength = this.getHeader().getBytes().length;
             int footerLength = this.getFooter().getBytes().length;
-
-            byte[] bytes = Files.readAllBytes( Paths.get( this.file ) );
 
             Base64.Decoder decoder = Base64.getDecoder();
 
@@ -82,25 +96,52 @@ public class PeerKeys {
             }
         }
 
-        public void save () throws IOException {
+        // https://www.novixys.com/blog/how-to-generate-rsa-keys-java/
+        @SuppressWarnings( "unchecked" )
+        public void load () throws NoSuchAlgorithmException, InvalidKeySpecException, IOException {
+            byte[] bytes = Files.readAllBytes( Paths.get( this.file ) );
+
+            this.read( bytes );
+        }
+
+        public String write () {
             Base64.Encoder encoder = Base64.getEncoder();
-            
+
+            StringBuffer buffer = new StringBuffer();
+
+            buffer.append( this.getHeader() );
+            buffer.append( encoder.encodeToString( this.key.getEncoded() ) );
+            buffer.append( this.getFooter() );
+
+            return buffer.toString();
+        }
+
+        public void save () throws IOException {
             Writer out = new FileWriter( this.file );
-            out.write( this.getHeader() );
-            out.write( encoder.encodeToString( this.key.getEncoded() ) );
-            out.write( this.getFooter() );
+            out.write( this.write() );
             out.close();
         }
     }
 
 
-    public static String keysFile = "./identity";
+    public String keysFile;
 
     protected String algorithm = "DSA";
 
-    protected PersistentKey<PublicKey> publicKey = new PersistentKey<>( this.algorithm, KeyType.Public, keysFile + ".pub" );
+    protected PersistentKey<PublicKey> publicKey;
 
-    protected PersistentKey<PrivateKey> privateKey = new PersistentKey<>( this.algorithm, KeyType.Private, keysFile + ".key" );
+    protected PersistentKey<PrivateKey> privateKey;
+
+    public PeerKeys ( String keysFile ) {
+        this.keysFile = keysFile;
+
+        this.publicKey = new PersistentKey<>( this.algorithm, KeyType.Public, keysFile + ".pub" );
+        this.privateKey = new PersistentKey<>( this.algorithm, KeyType.Private, keysFile + ".key" );
+    }
+
+    public String getAlgorithm () {
+        return this.algorithm;
+    }
 
     public void generateIdentityKeys () throws NoSuchAlgorithmException, IOException {
         KeyPairGenerator kpg = KeyPairGenerator.getInstance( this.algorithm );

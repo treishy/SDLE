@@ -8,10 +8,12 @@ import net.tomp2p.p2p.Peer;
 import net.tomp2p.p2p.PeerBuilder;
 import net.tomp2p.peers.Number160;
 import net.tomp2p.peers.PeerAddress;
+import security.PostSignature;
 
 import java.io.IOException;
 import java.io.Serializable;
 import java.net.*;
+import java.security.PublicKey;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -30,6 +32,8 @@ public class TimelinePeer {
 
     protected String username;
 
+    protected User user;
+
     protected InetAddress address;
 
     protected Peer peer;
@@ -44,12 +48,17 @@ public class TimelinePeer {
 
     protected DBUtils db;
 
-    protected PeerKeys keys = new PeerKeys();
+    protected PeerKeys keys;
 
     protected int id = 0;
 
     public TimelinePeer ( String username ) {
         this.username = username;
+        this.keys = new PeerKeys( "./identity-" + username );
+    }
+
+    public User getUser () {
+        return this.user;
     }
 
     public void startServer () {
@@ -58,6 +67,16 @@ public class TimelinePeer {
 
     public TimelineClient createClient ( InetSocketAddress host ) {
         return new TimelineClient( peer, host );
+    }
+
+    public TimelineClient createClient ( String username ) {
+        List<InetSocketAddress> addresses = this.findAddresses( username );
+
+        if ( addresses.size() > 0 ) {
+            return createClient( addresses.get( 0 ) );
+        }
+
+        return null;
     }
 
     /**
@@ -73,7 +92,9 @@ public class TimelinePeer {
 
         this.id = this.posts.stream().mapToInt( Post::getId ).max().orElse( -1 ) + 1;
 
-        // TODO Load subscriptions
+        this.user = new User( this.username, this.keys.publicKey.write(), this.posts.size() );
+
+        this.subscriptions = this.db.findSubscriptions();
     }
 
     /**
@@ -118,14 +139,25 @@ public class TimelinePeer {
 
         // TODO Self publish and publish all already existing subscriptions
         this.publishOwnership( this.username );
+
+        for ( User user : this.subscriptions ) {
+            try {
+                this.update( user.getUsername() );
+
+                this.publishOwnership( user.getUsername() );
+            } catch ( Exception ex ) {
+                ex.printStackTrace();
+            }
+        }
     }
 
     public void stop () {
-        Number160 self = this.peer.peerID();
-
         for ( User user : this.subscriptions ) {
-            // TODO We can fork and join this futures, running them all at the same time
-            this.peerDHT.remove( Number160.createHash( user.getUsername() ) ).contentKey( self ).start().awaitUninterruptibly();
+            try {
+                this.unpublishOwnership( user.getUsername() );
+            } catch ( Exception ex ) {
+                ex.printStackTrace();
+            }
         }
 
         this.peerDHT.shutdown().awaitUninterruptibly();
@@ -142,6 +174,8 @@ public class TimelinePeer {
 
         if ( this.db.insertPost( post ) ) {
             this.posts.add( post );
+
+            this.user.setActivity( this.user.getActivity() + 1 );
         } else {
             throw new Exception( "Could not store the post in the database." );
         }
@@ -152,24 +186,33 @@ public class TimelinePeer {
 
         List<Post> posts = first.getPosts( username, null );
 
-        // TODO Validate posts and exclude posts that do not match the signature
-        // TODO Store validated posts in the database
+        User subscription = this.subscriptions.stream().filter( user -> user.getUsername().equals( username ) ).findFirst().orElse( null );
+
+        if ( subscription != null ) {
+            PublicKey key = subscription.getPublicKey( this.keys.getAlgorithm() );
+
+            if ( key != null ) {
+                posts = posts.stream()
+                        .filter( post -> {
+                            try {
+                                return post.verify( key );
+                            } catch ( Exception e ) {
+                                e.printStackTrace();
+
+                                return false;
+                            }
+                        } )
+                        .collect( Collectors.toList() );
+            }
+        }
 
         return posts;
     }
 
-    /**
-     * Given a username, searches the DHT for all IP addresses that profess to store that user's data. Then samples a
-     * group of those addresses and queries them for the user timeline, validating each message by their signature,
-     * and merging all the timelines, removing duplicates
-     *
-     * @param username
-     */
-    public List<Post> fetch ( String username ) {
+    public List<InetSocketAddress> findAddresses ( String username ) {
         Collection<String> keys = EasyDHT.list( peerDHT, username );
-        System.out.println( keys );
 
-        List<InetSocketAddress> addresses = keys
+        return keys
                 .stream()
                 .map( hash -> {
                     try {
@@ -184,6 +227,17 @@ public class TimelinePeer {
                 } )
                 .filter( Objects::nonNull )
                 .collect( Collectors.toList() );
+    }
+
+    /**
+     * Given a username, searches the DHT for all IP addresses that profess to store that user's data. Then samples a
+     * group of those addresses and queries them for the user timeline, validating each message by their signature,
+     * and merging all the timelines, removing duplicates
+     *
+     * @param username
+     */
+    public List<Post> fetch ( String username ) {
+        List<InetSocketAddress> addresses = this.findAddresses( username );
 
         // TODO Sample a few of the returned addresses, and ask each one for the user's contents
         if ( addresses.size() > 0 ) {
@@ -203,14 +257,40 @@ public class TimelinePeer {
         }
     }
 
-    protected void publishOwnership ( String user ) throws IOException {
-//        Number160 self = Number160.createHash( this.address.toString() );
+    public User findProfile ( String username ) {
+        TimelineClient client = this.createClient( username );
 
+        if ( client == null ) {
+            return null;
+        }
+
+        User user = client.getProfile( username );
+
+        if ( user != null && user.getUsername() != null && user.getUsername().equals( username ) ) {
+            return user;
+        }
+
+        return null;
+    }
+
+    public void update ( String username ) {
+        Set<Integer> existing = this.db.findPosts( username ).stream().map( Post::getId ).collect( Collectors.toSet() );
+
+        List<Post> posts = this.fetch( username ).stream().filter( p -> !existing.contains( p.getId() ) ).collect( Collectors.toList() );
+
+        posts.forEach( p -> this.db.insertPost( p ) );
+    }
+
+    protected void publishOwnership ( String user ) throws IOException {
         EasyDHT.add( peerDHT, user, this.address.getHostAddress() + ":" + this.port );
     }
 
     protected void unpublishOwnership ( String user ) throws IOException {
         EasyDHT.remove( peerDHT, user, this.address.getHostAddress() + ":" + this.port );
+    }
+
+    public boolean isSubscribedTo ( String user ) {
+        return this.subscriptions.stream().anyMatch( u -> u.getUsername().equals( user ) );
     }
 
     /**
@@ -219,10 +299,11 @@ public class TimelinePeer {
      * @param user
      */
     public void subscribeTo ( User user ) throws IOException {
-        this.publishOwnership( user.getUsername() );
+        this.update( user.getUsername() );
 
-        // TODO Save subscription to database
-        // TODO Fetch user posts and store them
+        this.db.insertSubscription( user );
+
+        this.publishOwnership( user.getUsername() );
 
         this.subscriptions.add( user );
     }
@@ -247,22 +328,24 @@ interface TimelineServerInterface {
 }
 
 class TimelineRequestMessage implements Serializable {
-    public enum Type {GetPosts, GetPublicKey}
+    public enum Type {GetPosts, GetProfile}
 
     public Type type;
 
+
     // GetPosts
-    public String user;
     public Date time;
 
-    // GetPublicKey
+    // GetProfile & GetPosts
+    public String user;
 }
 
 class TimelineResponseMessage implements Serializable {
     // GetPosts
     public List<Post> posts;
 
-    // GetPublicKey
+    // GetProfile
+    public User user;
 }
 
 class TimelineClient implements TimelineServerInterface {
@@ -309,6 +392,21 @@ class TimelineClient implements TimelineServerInterface {
 
         return response.posts;
     }
+
+    public User getProfile ( String username ) {
+        TimelineRequestMessage request = new TimelineRequestMessage();
+
+        request.type = TimelineRequestMessage.Type.GetProfile;
+        request.user = username;
+
+        TimelineResponseMessage response = this.call( request );
+
+        if ( response == null ) {
+            return null;
+        }
+
+        return response.user;
+    }
 }
 
 class TimelineServer implements TimelineServerInterface {
@@ -324,6 +422,8 @@ class TimelineServer implements TimelineServerInterface {
 
             if ( request.type == TimelineRequestMessage.Type.GetPosts ) {
                 response.posts = this.getPosts( request.user, request.time );
+            } else if ( request.type == TimelineRequestMessage.Type.GetProfile ) {
+                response.user = this.getProfile( request.user );
             }
 
             return response;
@@ -340,6 +440,18 @@ class TimelineServer implements TimelineServerInterface {
             // When the requested username is now our own
             // Lookup in the Mongo database for posts from this user
             return new ArrayList<>();
+        }
+    }
+
+    public User getProfile ( String user ) {
+        if ( this.peer.username.equals( user ) ) {
+            return new User( this.peer.username, this.peer.keys.publicKey.write(), this.peer.posts.size() );
+        } else {
+            return this.peer.subscriptions
+                    .stream()
+                    .filter( u -> u.getUsername().equals( user ) )
+                    .findFirst()
+                    .orElse( null );
         }
     }
 }
