@@ -73,6 +73,10 @@ public class DBUtils {
         return result;
     }
 
+    public void updateUser(String username, int atividade){
+        collectionUsers.updateOne(eq("username", username), new Document("$set", new Document("atividade", atividade)));
+    }
+
     public void deleteAllPostsFromUser(String username){
         DeleteResult result = collectionPosts.deleteMany(eq("utilizador", username));
         System.out.println(result.getDeletedCount());
