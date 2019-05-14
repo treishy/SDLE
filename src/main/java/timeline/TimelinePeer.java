@@ -186,7 +186,7 @@ public class TimelinePeer {
 
         List<Post> posts = first.getPosts( username, null );
 
-        User subscription = this.subscriptions.stream().filter( user -> user.getUsername().equals( username ) ).findFirst().orElse( null );
+        User subscription = this.getSubscription( username );
 
         if ( subscription != null ) {
             PublicKey key = subscription.getPublicKey( this.keys.getAlgorithm() );
@@ -274,11 +274,17 @@ public class TimelinePeer {
     }
 
     public void update ( String username ) {
+        User subscription = this.getSubscription( username );
+
         Set<Integer> existing = this.db.findPosts( username ).stream().map( Post::getId ).collect( Collectors.toSet() );
 
         List<Post> posts = this.fetch( username ).stream().filter( p -> !existing.contains( p.getId() ) ).collect( Collectors.toList() );
 
         posts.forEach( p -> this.db.insertPost( p ) );
+
+        subscription.setActivity( subscription.getActivity() + posts.size() );
+
+        this.db.updateUser( username, subscription.getActivity() );
     }
 
     protected void publishOwnership ( String user ) throws IOException {
@@ -287,6 +293,10 @@ public class TimelinePeer {
 
     protected void unpublishOwnership ( String user ) throws IOException {
         EasyDHT.remove( peerDHT, user, this.address.getHostAddress() + ":" + this.port );
+    }
+
+    public User getSubscription ( String user ) {
+        return this.subscriptions.stream().filter( u -> u.getUsername().equals( user ) ).findFirst().orElse( null );
     }
 
     public boolean isSubscribedTo ( String user ) {
@@ -318,8 +328,9 @@ public class TimelinePeer {
 
         this.subscriptions.remove( user );
 
-        // TODO Remove subscription to database
-        // TODO Remove user posts from the database
+        this.db.deleteAllPostsFromUser( user.getUsername() );
+
+        this.db.deleteSubscription( user.getUsername() );
     }
 }
 
@@ -445,13 +456,9 @@ class TimelineServer implements TimelineServerInterface {
 
     public User getProfile ( String user ) {
         if ( this.peer.username.equals( user ) ) {
-            return new User( this.peer.username, this.peer.keys.publicKey.write(), this.peer.posts.size() );
+            return this.peer.getUser();
         } else {
-            return this.peer.subscriptions
-                    .stream()
-                    .filter( u -> u.getUsername().equals( user ) )
-                    .findFirst()
-                    .orElse( null );
+            return this.peer.getSubscription( user );
         }
     }
 }

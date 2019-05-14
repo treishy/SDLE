@@ -52,9 +52,11 @@ public class Application {
                 if ( command.startsWith( "post " ) ) {
                     peer.publish( command.substring( "post ".length() ) );
                 } else if ( command.startsWith( "find " ) ) {
-                    String username = command.split( " " )[ 1 ];
+                    String[] parts = command.split( " " );
 
-                    int count = Integer.parseInt( command.split( " " )[ 2 ] );
+                    String username = parts[ 1 ];
+
+                    int count = parts.length > 2 ? Integer.parseInt( command.split( " " )[ 2 ] ) : 5;
 
                     List<Post> posts = peer.find( username );
 
@@ -97,7 +99,13 @@ public class Application {
                         System.out.printf( " - %s (%d) \n", sub.getUsername(), sub.getActivity() );
                     }
                 } else if ( command.startsWith( "sub remove" ) ) {
-                    // TODO
+                    String[] parts = command.split( " " );
+
+                    if ( peer.isSubscribedTo( parts[ 2 ] ) )  {
+                        peer.unsubscribeTo( peer.getSubscription( parts[ 2 ] ) );
+                    } else {
+                        System.err.println( "Already not subscribed to " + parts[ 2 ] );
+                    }
                 } else if ( command.startsWith( "sub update" ) ) {
                     String[] parts = command.split( " " );
 
@@ -118,7 +126,7 @@ public class Application {
                 } else if ( command.equals( "help" ) ) {
                     System.out.println( "Available commands:" );
                     System.out.println( " - post <message>: Posts a message under the current user" );
-                    System.out.println( " - find <username> <n>: Shows \"n\" newest messages from \"username\"" );
+                    System.out.println( " - find <username> [n]: Shows \"n\" (default 5) newest messages from \"username\"" );
                     System.out.println( " - sub add <username>: Creates a subscription to a user" );
                     System.out.println( " - sub list: Lists all user subscriptions" );
                     System.out.println( " - sub update <username>: Refreshes all posts from the given username" );
