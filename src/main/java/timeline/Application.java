@@ -38,9 +38,6 @@ public class Application {
         return scanner.nextLine().trim();
     }
 
-    // ARGS:
-    // 1234
-    // 2345 127.0.0.1 1234
     public static void commands ( Scanner scanner, TimelinePeer peer ) {
         String command = null;
 
@@ -96,13 +93,15 @@ public class Application {
                     System.out.println( "SUBSCRIPTIONS:" );
 
                     for ( User sub : peer.subscriptions ) {
-                        System.out.printf( " - %s (%d) \n", sub.getUsername(), sub.getActivity() );
+                        System.out.printf( " - %s (%d) - %s\n", sub.getUsername(), sub.getActivity(), sub.getPublicKeyFingerprint( peer.keys.getAlgorithm() ) );
                     }
                 } else if ( command.startsWith( "sub remove" ) ) {
                     String[] parts = command.split( " " );
 
                     if ( peer.isSubscribedTo( parts[ 2 ] ) )  {
                         peer.unsubscribeTo( peer.getSubscription( parts[ 2 ] ) );
+
+                        System.out.println( "Subscription successfully removed." );
                     } else {
                         System.err.println( "Already not subscribed to " + parts[ 2 ] );
                     }
@@ -140,6 +139,8 @@ public class Application {
                     peer.db.collectionPosts.deleteMany( new BasicDBObject() );
 
                     break;
+                } else if ( command.startsWith( "dht get " ) ) {
+                    System.out.println( EasyDHT.list( peer.peerDHT, command.split( " " )[ 2 ] ) );
                 } else {
                     System.out.println( "Unknown command. Try again." );
                 }
@@ -149,27 +150,47 @@ public class Application {
         } while ( !command.equals( "quit" ) );
     }
 
+    // ARGS:
+    // superpeer 1112
+    // 1234 120.0.0.1 1112
+    // 2345 127.0.0.1 1112
     public static void main ( String[] args ) {
         Scanner scanner = new Scanner( System.in );
 
-        String username = Application.login( scanner );
-
-        TimelinePeer peer = new TimelinePeer( username );
-
         try {
-            peer.load();
+            if ( args[ 0 ].equals( "superpeer" ) ) {
+                InetSocketAddress address = args.length >= 4
+                        ? InetSocketAddress.createUnresolved( args[ 2 ], Integer.parseInt( args[ 3 ] ) )
+                        : null;
 
-            InetSocketAddress address = args.length >= 3
-                    ? InetSocketAddress.createUnresolved( args[ 1 ], Integer.parseInt( args[ 2 ] ) )
-                    : null;
+                SuperPeer peer = new SuperPeer();
 
-            peer.start( Integer.parseInt( args[ 0 ] ), address );
+                peer.start( Integer.parseInt( args[ 1 ] ), address );
 
-            System.out.printf( "Fingerprint:\n%s\n", peer.getUser().getPublicKeyFingerprint( peer.keys.getAlgorithm() ) );
+                System.out.println( "Press enter to exit..." );
 
-            Application.commands( scanner, peer );
+                scanner.nextLine();
 
-            peer.stop();
+                peer.stop();
+            } else {
+                String username = Application.login( scanner );
+
+                TimelinePeer peer = new TimelinePeer( username );
+
+                peer.load();
+
+                InetSocketAddress address = args.length >= 3
+                        ? InetSocketAddress.createUnresolved( args[ 1 ], Integer.parseInt( args[ 2 ] ) )
+                        : null;
+
+                peer.start( Integer.parseInt( args[ 0 ] ), address );
+
+                System.out.printf( "Fingerprint:\n%s\n", peer.getUser().getPublicKeyFingerprint( peer.keys.getAlgorithm() ) );
+
+                Application.commands( scanner, peer );
+
+                peer.stop();
+            }
         } catch ( Exception e ) {
             e.printStackTrace();
         }

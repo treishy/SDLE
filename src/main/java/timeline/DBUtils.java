@@ -79,11 +79,10 @@ public class DBUtils {
 
     public void deleteAllPostsFromUser(String username){
         DeleteResult result = collectionPosts.deleteMany(eq("utilizador", username));
-        System.out.println(result.getDeletedCount());
     }
 
     public void deleteSubscription(String username){
-        collectionUsers.deleteOne(eq("utilizador", username));
+        collectionUsers.deleteOne(eq("username", username));
     }
 
     public List<User> findSubscriptions () {

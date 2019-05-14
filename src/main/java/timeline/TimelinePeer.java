@@ -15,30 +15,13 @@ import java.io.Serializable;
 import java.net.*;
 import java.security.PublicKey;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
-public class TimelinePeer {
-    protected static InetAddress getSelfAddress () {
-        try ( final DatagramSocket socket = new DatagramSocket() ) {
-            socket.connect( InetAddress.getByName( "8.8.8.8" ), 10002 );
-
-            return InetAddress.getByName( socket.getLocalAddress().getHostAddress() );
-        } catch ( Exception ex ) {
-            return null;
-        }
-    }
-
-    protected int port = 4050;
-
+public class TimelinePeer extends SuperPeer {
     protected String username;
 
     protected User user;
-
-    protected InetAddress address;
-
-    protected Peer peer;
-
-    protected PeerDHT peerDHT;
 
     protected List<User> subscriptions = new ArrayList<>();
 
@@ -70,10 +53,10 @@ public class TimelinePeer {
     }
 
     public TimelineClient createClient ( String username ) {
-        List<InetSocketAddress> addresses = this.findAddresses( username );
+        InetSocketAddress addresses = this.findRandomAddress( username );
 
-        if ( addresses.size() > 0 ) {
-            return createClient( addresses.get( 0 ) );
+        if ( addresses != null ) {
+            return createClient( addresses );
         }
 
         return null;
@@ -104,44 +87,15 @@ public class TimelinePeer {
      * @throws Exception
      */
     public void start ( int port, InetSocketAddress knownPeer ) throws Exception {
-        this.port = port;
+        super.start( port, knownPeer );
 
-        this.address = getSelfAddress();
+        this.startServer();
 
-        if ( this.address == null ) {
-            throw new Exception( "Cannot determine own address." );
-        }
-
-        InetSocketAddress portAddress = InetSocketAddress.createUnresolved( this.address.getHostAddress(), port );
-
-        Number160 key = Number160.createHash( portAddress.getHostString() + ":" + portAddress.getPort() );
-
-        this.peer = new PeerBuilder( key )
-                .ports( port )
-                .start();
-
-        // Inicia a DHT
-        this.peerDHT = new PeerBuilderDHT( this.peer ).storage( new StorageMemory() ).start();
-
-        // O segundo a iniciar liga-se ao IP do primeiro através do método bootstrap
-        if ( knownPeer != null ) {
-            this.peer.bootstrap()
-                    .inetAddress( InetAddress.getByName( knownPeer.getHostName() ) )
-                    .ports( knownPeer.getPort() )
-                    .start();
-
-            // Espera-se um bocado para ele se conectar aos outros Peers e obter as informações.
-            // Não sei se há maneira melhor de fazer isto sem ser esperar n segundos
-            Thread.sleep( 4000 );
-        } else {
-            this.startServer();
-        }
-
-        // TODO Self publish and publish all already existing subscriptions
         this.publishOwnership( this.username );
 
         for ( User user : this.subscriptions ) {
             try {
+                this.update( user.getUsername() );
                 this.update( user.getUsername() );
 
                 this.publishOwnership( user.getUsername() );
@@ -160,9 +114,7 @@ public class TimelinePeer {
             }
         }
 
-        this.peerDHT.shutdown().awaitUninterruptibly();
-
-        this.peer.shutdown().awaitUninterruptibly();
+        super.stop();
 
         this.db.mongoClient.close();
     }
@@ -209,6 +161,16 @@ public class TimelinePeer {
         return posts;
     }
 
+    public InetSocketAddress findRandomAddress ( List<InetSocketAddress> addresses ) {
+        int i = ThreadLocalRandom.current().nextInt( addresses.size() );
+
+        return addresses.get( i );
+    }
+
+    public InetSocketAddress findRandomAddress ( String username ) {
+        return findRandomAddress( findAddresses( username ) );
+    }
+
     public List<InetSocketAddress> findAddresses ( String username ) {
         Collection<String> keys = EasyDHT.list( peerDHT, username );
 
@@ -237,11 +199,11 @@ public class TimelinePeer {
      * @param username
      */
     public List<Post> fetch ( String username ) {
-        List<InetSocketAddress> addresses = this.findAddresses( username );
+        InetSocketAddress addresses = this.findRandomAddress( username );
 
         // TODO Sample a few of the returned addresses, and ask each one for the user's contents
-        if ( addresses.size() > 0 ) {
-            return fetch( username, addresses.get( 0 ) );
+        if ( addresses != null ) {
+            return fetch( username, addresses );
         }
 
         return new ArrayList<>();
@@ -309,13 +271,13 @@ public class TimelinePeer {
      * @param user
      */
     public void subscribeTo ( User user ) throws IOException {
+        this.subscriptions.add( user );
+
         this.update( user.getUsername() );
 
         this.db.insertSubscription( user );
 
         this.publishOwnership( user.getUsername() );
-
-        this.subscriptions.add( user );
     }
 
     /**
