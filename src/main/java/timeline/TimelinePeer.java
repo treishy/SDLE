@@ -131,6 +131,16 @@ public class TimelinePeer extends SuperPeer {
         } else {
             throw new Exception( "Could not store the post in the database." );
         }
+
+        this.findAddresses( this.username )
+                .stream()
+                .filter( addr -> !addr.getHostString().equals( this.address.getHostAddress() ) || addr.getPort() != this.port )
+                .limit( 100 )
+                .forEach( addr -> {
+                    TimelineClient client = createClient( addr );
+
+                    client.pushPost( post );
+                } );
     }
 
     public List<Post> fetch ( String username, InetSocketAddress address ) {
@@ -298,10 +308,12 @@ public class TimelinePeer extends SuperPeer {
 
 interface TimelineServerInterface {
     List<Post> getPosts ( String user, Date time );
+
+    void pushPost ( Post post );
 }
 
 class TimelineRequestMessage implements Serializable {
-    public enum Type {GetPosts, GetProfile}
+    public enum Type {GetPosts, GetProfile, PushPost}
 
     public Type type;
 
@@ -311,6 +323,9 @@ class TimelineRequestMessage implements Serializable {
 
     // GetProfile & GetPosts
     public String user;
+
+    // PushPost
+    public Post post;
 }
 
 class TimelineResponseMessage implements Serializable {
@@ -380,6 +395,15 @@ class TimelineClient implements TimelineServerInterface {
 
         return response.user;
     }
+
+    public void pushPost ( Post post ) {
+        TimelineRequestMessage request = new TimelineRequestMessage();
+
+        request.type = TimelineRequestMessage.Type.PushPost;
+        request.post = post;
+
+        this.call( request );
+    }
 }
 
 class TimelineServer implements TimelineServerInterface {
@@ -397,6 +421,8 @@ class TimelineServer implements TimelineServerInterface {
                 response.posts = this.getPosts( request.user, request.time );
             } else if ( request.type == TimelineRequestMessage.Type.GetProfile ) {
                 response.user = this.getProfile( request.user );
+            } else if ( request.type == TimelineRequestMessage.Type.PushPost ) {
+                this.pushPost( request.post );
             }
 
             return response;
@@ -410,9 +436,12 @@ class TimelineServer implements TimelineServerInterface {
                     .filter( post -> time == null || post.getData().after( time ) )
                     .collect( Collectors.toList() );
         } else {
-            // When the requested username is now our own
+            // When the requested username is not our own
             // Lookup in the Mongo database for posts from this user
-            return new ArrayList<>();
+            return this.peer.db.findPosts( user )
+                    .stream()
+                    .filter( post -> time == null || post.getData().after( time ) )
+                    .collect( Collectors.toList() );
         }
     }
 
@@ -422,5 +451,25 @@ class TimelineServer implements TimelineServerInterface {
         } else {
             return this.peer.getSubscription( user );
         }
+    }
+
+    public void pushPost ( Post post ) {
+        if ( !this.peer.isSubscribedTo( post.getUtilizador() ) ) {
+            return;
+        }
+
+        User subscription = this.peer.getSubscription( post.getUtilizador() );
+
+        try {
+            if ( post.verify( subscription.getPublicKey( this.peer.keys.getAlgorithm() ) ) ) {
+                boolean exists = this.peer.db.hasPost( post.getUtilizador(), post.getId() );
+
+                if ( !exists ) {
+                    this.peer.db.insertPost( post );
+
+                    this.peer.db.updateUser( subscription.getUsername(), subscription.getActivity() + 1 );
+                }
+            }
+        } catch ( Exception e ) { }
     }
 }

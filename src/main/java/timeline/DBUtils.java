@@ -9,6 +9,7 @@ import com.mongodb.client.result.DeleteResult;
 import org.bson.Document;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.function.Consumer;
@@ -115,7 +116,13 @@ public class DBUtils {
             list.add( post );
         } );
 
+        list.sort( Comparator.comparing( Post::getData ) );
+
         return list;
+    }
+
+    public boolean hasPost ( String utilizador, int id ) {
+        return collectionPosts.find( and( eq( "utilizador", utilizador ), eq( "id", id ) ) ).first() != null;
     }
 
     public static void main(String[] args) {
