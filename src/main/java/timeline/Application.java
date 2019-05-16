@@ -46,7 +46,9 @@ public class Application {
             command = scanner.nextLine().trim();
 
             try {
-                if ( command.startsWith( "post " ) ) {
+                if ( command.startsWith( "timeline" ) ) {
+                    new GenerateTimeline( peer.db.findAllPostsOrdered() ).generateAndOpen( "timeline.html" );
+                } else if ( command.startsWith( "post " ) ) {
                     peer.publish( command.substring( "post ".length() ) );
                 } else if ( command.startsWith( "find " ) ) {
                     String[] parts = command.split( " " );
