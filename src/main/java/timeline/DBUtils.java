@@ -5,6 +5,7 @@ import com.mongodb.DB;
 import com.mongodb.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.Sorts;
 import com.mongodb.client.result.DeleteResult;
 import org.bson.Document;
 
@@ -98,6 +99,26 @@ public class DBUtils {
 
             list.add( user );
         } );
+
+        return list;
+    }
+
+    public List<Post> findAllPostsOrdered (  ) {
+        List<Post> list = new ArrayList<>();
+
+        collectionPosts.find(  ).sort(Sorts.ascending("getTime")).forEach( ( Consumer<? super Document> ) doc -> {
+            int id = doc.getInteger( "id" );
+            Date date = doc.getDate( "data" );
+            String message = doc.getString( "mensagem" );
+            String signature = doc.getString( "assinatura" );
+            String username = doc.getString( "utilizador" );
+
+            Post post = new Post( id, date, message, signature, username );
+
+            list.add( post );
+        } );
+
+        //list.sort( Comparator.comparing( Post::getData ) );
 
         return list;
     }
