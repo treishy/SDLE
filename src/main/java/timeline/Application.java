@@ -126,9 +126,11 @@ public class Application {
                     }
                 } else if ( command.equals( "help" ) ) {
                     System.out.println( "Available commands:" );
+                    System.out.println( " - timeline: Generate an HTML view of the user timeline" );
                     System.out.println( " - post <message>: Posts a message under the current user" );
                     System.out.println( " - find <username> [n]: Shows \"n\" (default 5) newest messages from \"username\"" );
                     System.out.println( " - sub add <username>: Creates a subscription to a user" );
+                    System.out.println( " - sub remove <username>: Removes a subscription to a user" );
                     System.out.println( " - sub list: Lists all user subscriptions" );
                     System.out.println( " - sub update <username>: Refreshes all posts from the given username" );
                     System.out.println( " - sub update: Refreshes all posts from all subscriptions" );
